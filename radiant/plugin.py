@@ -1,4 +1,5 @@
-from bdh_sdk import PluginSpec, Tile
+from bdh_sdk import PluginSpec, Setting, Tile
+from bdh_sdk.plugins import INT, LIFECYCLE_ON_DEMAND, NETWORK_NONE
 
 spec = PluginSpec(
     id="radiant",
@@ -15,4 +16,41 @@ spec = PluginSpec(
             order=40,
         ),
     ),
+    settings=(
+        Setting(
+            "setpoint_debounce_s",
+            "Setpoint debounce",
+            type=INT,
+            default=10,
+            minimum=0,
+            maximum=120,
+            unit="s",
+            help="How long the page waits after the last +/- tap before sending the setpoint "
+                 "(the Nest integration is rate limited).",
+        ),
+    ),
+    api_version=2,
+    permissions=(
+        "ha.read:sensor.usl_environmental_temperature_3",
+        "ha.read:input_boolean.home_away_mode_enabled",
+        "ha.read:sensor.aeco_1988_*",
+        "ha.read:binary_sensor.aeco_1988_*",
+        "ha.read:switch.aeco_1988_*",
+        "ha.read:sensor.thermux_*",
+        "ha.read:sensor.mechanical_room_*",
+        "ha.read:binary_sensor.mechanical_room_*",
+        "ha.read:climate.aeco_1988_climate",
+        "ha.read:climate.master_bedroom",
+        "ha.read:climate.main_floor",
+        "ha.read:climate.ski_room",
+        "ha.read:climate.basement_master",
+        "ha.read:climate.basement_bunk_rooms",
+        "ha.call:climate.set_temperature",
+    ),
+    network=NETWORK_NONE,
+    # No background work: the debounce runs in the browser. The tile status is
+    # read live from HA, so wake every 5 minutes to keep it fresh while idle.
+    lifecycle=LIFECYCLE_ON_DEMAND,
+    wake_every=300,
+    memory_mb=96,
 )
