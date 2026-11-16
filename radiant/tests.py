@@ -1,9 +1,10 @@
+import fnmatch
 import json
 from datetime import datetime, timedelta, timezone as dt_tz
 from unittest.mock import patch
 
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
-from django.test import TestCase, override_settings, tag
+from django.test import SimpleTestCase, TestCase, override_settings, tag
 from django.urls import reverse
 
 from . import config as cfg
@@ -202,6 +203,61 @@ class RadiantDebounceSettingTests(TestCase):
             resp = self.client.get(reverse("radiant"))
         self.assertEqual(resp.context["debounce_ms"], 2500)
 
+
+class ManifestTests(SimpleTestCase):
+    def test_hub_api_2_manifest(self):
+        from .plugin import spec
+        m = spec.manifest()
+        self.assertEqual(m["api_version"], 2)
+        self.assertEqual((m["network"], m["lifecycle"], m["memory_mb"], m["wake_every"]),
+                         ("none", "on_demand", 96, 300))
+        self.assertEqual([p for p in m["permissions"] if p.startswith("ha.call:")],
+                         ["ha.call:climate.set_temperature"])
+
+    def test_read_grants_cover_every_entity(self):
+        from .plugin import spec
+        globs = [p[len("ha.read:"):] for p in spec.permissions if p.startswith("ha.read:")]
+        for eid in set(cfg.all_entity_ids()) | set(cfg.history_entity_ids()):
+            self.assertTrue(any(fnmatch.fnmatchcase(eid, g) for g in globs), eid)
+
+
+class BrokerTests(TestCase):
+    """In its container the app reads HA, setpoints and settings through the broker."""
+
+    def setUp(self):
+        from bdh_sdk import rpc, settings as sdk_settings
+        from bdh_sdk.testing import FakeBroker
+
+        store = sdk_settings._store
+        self.addCleanup(sdk_settings.set_store, store)
+        self.broker = FakeBroker(grants=("settings.get", "ha.*"), install=True, app_id="radiant")
+        self.broker.start()
+        self.addCleanup(self.broker.stop)
+        self.flush = lambda: rpc.flush(5)
+        self.broker.on("ha.get_entity_states", lambda p: {
+            eid: s for eid, s in make_states().items() if eid in p["entity_ids"]})
+        self.broker.on("ha.call_service", lambda p: [True, None])
+
+    def test_states_via_broker(self):
+        resp = self.client.get(reverse("radiant_states"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["tank"], 38.61)
+        (call,) = self.broker.ops("ha.get_entity_states")
+        self.assertIn(cfg.AECO["tank"], call["entity_ids"])
+
+    def test_setpoint_via_broker(self):
+        resp = self.client.post(reverse("radiant_setpoint"),
+                                json.dumps({"entity_id": "climate.main_floor", "temperature": 21}),
+                                content_type="application/json")
+        self.assertEqual(resp.status_code, 200)
+        (call,) = self.broker.ops("ha.call_service")
+        self.assertEqual((call["domain"], call["service"], call["entity_id"], call["extra_data"]),
+                         ("climate", "set_temperature", "climate.main_floor", {"temperature": 21}))
+
+    def test_debounce_from_hub_setting(self):
+        self.broker.settings[("radiant", "setpoint_debounce_s")] = 3
+        resp = self.client.get(reverse("radiant"))
+        self.assertEqual(resp.context["debounce_ms"], 3000)
 
 @tag('selenium')
 @override_settings(RADIANT_SETPOINT_DEBOUNCE_S=1.5)
