@@ -6,12 +6,14 @@
   --rad-line: rgba(255,255,255,.1);
   --rad-muted: rgba(232,238,245,.55);
   --rad-gold: #ffc35c; --rad-hot: #ff6a3d; --rad-cold: #5ec8ff; --rad-ok: #3cc8b4;
+  /* height of the SDK .bdh-toolbar holding our navbar_extras (tabs + status) */
+  --rad-bar: 46px;
 }
 html, body {
   background: radial-gradient(ellipse 120% 80% at 50% 0%, #1d3350 0%, #0c1622 55%, #060a10 100%) fixed !important;
   color: #e8eef5; overflow: hidden;
 }
-.rad-page { height: calc(100vh - 62px); padding: 14px 4px; display: flex; flex-direction: column; box-sizing: border-box; }
+.rad-page { height: calc(100vh - var(--rad-bar)); padding: 14px 4px; display: flex; flex-direction: column; box-sizing: border-box; }
 .rad-page > .rad-view { flex: 1; min-height: 0; }
 .rad-hidden { display: none !important; }
 .rad-loading { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--rad-muted); font-size: 1.4rem; font-weight: 300; letter-spacing: .05em; }
@@ -125,7 +127,7 @@ html, body {
 
 /* ---------- C: house section ---------- */
 .rad-gridC { display: grid; grid-template-columns: 1.8fr 1fr; gap: 14px; height: 100%; }
-#rad-house { width: 100%; height: auto; max-height: calc(100vh - 62px - 170px); }
+#rad-house { width: 100%; height: auto; max-height: calc(100vh - var(--rad-bar) - 170px); }
 .room { cursor: pointer; transition: fill-opacity .2s; }
 .roomtxt { pointer-events: none; }
 .rad-sel { border-radius: 20px; padding: 18px 20px; }
@@ -162,7 +164,8 @@ html, body {
 @media (max-width: 600px) {
   html { overflow-x: hidden; overflow-y: auto; }
   body { overflow: visible; }
-  .rad-page { height: auto; min-height: calc(100vh - 118px); padding: 12px 4px calc(18px + env(safe-area-inset-bottom)); display: block; }
+  :root { --rad-bar: 55px; }
+  .rad-page { height: auto; min-height: calc(100vh - var(--rad-bar)); padding: 12px 4px calc(18px + env(safe-area-inset-bottom)); display: block; }
   .rad-strip, .rad-view, .rad-tabs { display: none !important; }
 
   .rad-seg { display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); }
