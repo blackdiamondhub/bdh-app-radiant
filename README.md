@@ -1,9 +1,9 @@
 # bdh-app-radiant
 
 Black Diamond Hub app: radiant heating and heat-pump plant dashboard (Home Assistant). Moved out of
-[BlackDiamondHub](https://github.com/blackdiamondlodge/BlackDiamondHub) and
+[BlackDiamondHub](https://github.com/blackdiamondhub/BlackDiamondHub) and
 installed into the hub through the `blackdiamondhub.plugins` entry point
-(see [bdh-sdk](https://github.com/blackdiamondlodge/bdh-sdk)).
+(see [bdh-sdk](https://github.com/blackdiamondhub/bdh-sdk)).
 
 Page: `/radiant/`.
 

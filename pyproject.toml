@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.urls]
-Source = "https://github.com/blackdiamondlodge/bdh-app-radiant"
+Source = "https://github.com/blackdiamondhub/bdh-app-radiant"
 
 [project.entry-points."blackdiamondhub.plugins"]
 radiant = "radiant.plugin:spec"
