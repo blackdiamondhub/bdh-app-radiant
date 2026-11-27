@@ -352,3 +352,190 @@ class HubFrameLayoutTests(SimpleTestCase):
                 if pattern.search(line):
                     hits.append(f"{path.relative_to(root)}:{n}: {line.strip()}")
         self.assertEqual(hits, [])
+
+
+class AssistantToolTests(SimpleTestCase):
+    """The assistant's thermostat tools against a fake HA snapshot."""
+
+    def setUp(self):
+        self.states = make_states()
+        self.states["climate.basement_bunk_rooms"]["attributes"].update(current_temperature=17.6, temperature=17.5)
+        self.states["climate.basement_master"] = _s("climate.basement_master", "off", current_temperature=15.3,
+                                                    temperature=None, min_temp=10, max_temp=32)
+        # Heat pumps and other climates sit in HA too; the tools must never touch them.
+        for eid in ("climate.arctic_heat_pump_1", "climate.arctic_heat_pump_2", "climate.hot_tub_heater"):
+            self.states[eid] = _s(eid, "heat", current_temperature=40, temperature=45)
+        self.reads = []
+        self.calls = []
+
+        def get(ids):
+            self.reads.append(list(ids))
+            return {eid: s for eid, s in self.states.items() if eid in ids}
+
+        def call(domain, service, entity_id, data):
+            self.calls.append((domain, service, entity_id, data))
+            self.states[entity_id]["attributes"]["temperature"] = data["temperature"]
+            return True, None
+
+        for target, fn in (("radiant.assistant.get_entity_states", get),
+                           ("radiant.assistant.call_service", call),
+                           ("radiant.assistant.app_setting", lambda app, key, default, **kw: default)):
+            patcher = patch(target, side_effect=fn)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_tool(self, tool_id, mode="guest", **args):
+        from . import assistant
+        return assistant.run_tool(tool_id, args, mode=mode)
+
+    def set(self, mode="guest", **args):
+        return self.run_tool("set_thermostat", mode=mode, **args)
+
+    def sent(self):
+        return {eid: data["temperature"] for _, _, eid, data in self.calls}
+
+    def test_declarations(self):
+        from bdh_sdk import ALL_MODES
+        from . import assistant
+        tools = {t.id: t for t in assistant.tools(mode="guest")}
+        self.assertEqual(set(tools), {"thermostat_status", "set_thermostat"})
+        self.assertTrue(tools["thermostat_status"].readonly)
+        self.assertFalse(tools["set_thermostat"].readonly or tools["set_thermostat"].confirm)
+        self.assertTrue(all(t.modes == ALL_MODES for t in tools.values()))
+        self.assertIn("18-24", tools["set_thermostat"].description)
+        self.assertIn("10-32", {t.id: t for t in assistant.tools(mode="owner")}["set_thermostat"].description)
+        from .plugin import spec
+        self.assertEqual((spec.tools, spec.run_tool), ("radiant.assistant.tools", "radiant.assistant.run_tool"))
+
+    def test_matching(self):
+        from bdh_sdk.tools import ToolError
+        from .assistant import resolve
+        ids = lambda text: [z["id"] for z in resolve(text)]  # noqa: E731
+        self.assertEqual(ids("the master bedroom"), ["master_bedroom"])
+        self.assertEqual(ids("bunk room"), ["basement_bunk_rooms"])
+        self.assertEqual(ids("Basement + Bunks"), ["basement_bunk_rooms"])
+        self.assertEqual(ids("kitchen"), ["main_floor"])
+        self.assertEqual(ids("living room"), ["main_floor"])
+        self.assertEqual(ids("downstairs master"), ["basement_master"])
+        self.assertEqual(ids("bunk rum"), ["basement_bunk_rooms"])
+        self.assertEqual(ids("downstairs"), ["basement_master", "basement_bunk_rooms"])
+        self.assertEqual(ids("ski room and master bedroom"), ["master_bedroom", "ski_room"])
+        self.assertEqual(len(ids("the whole house")), 5)
+        self.assertEqual(len(ids("all")), 5)
+        with self.assertRaisesMessage(ToolError, "could mean Master Bedroom and Basement Master"):
+            resolve("master")
+        with self.assertRaisesMessage(ToolError, "no thermostat zone called 'garage'"):
+            resolve("garage")
+
+    def test_status_compact(self):
+        text = self.run_tool("thermostat_status")
+        self.assertEqual(text, "Master Bedroom 19°, set 20°. Main Floor 19°, set 20°, heating. "
+                               "Ski Room 19°, set 20°. Basement Master 15.5°, heat off. "
+                               "Basement + Bunks 17.5°, set 17.5°.")
+        self.assertEqual(self.run_tool("thermostat_status", zones="bunk room"),
+                         "Basement + Bunks 17.5°, set 17.5°, floor loop 25°.")
+        read = {eid for ids in self.reads for eid in ids}
+        self.assertFalse({e for e in read if e.startswith("climate.")} - cfg.ZONE_CLIMATES)
+
+    def test_status_away_and_ha_down(self):
+        from bdh_sdk.tools import ToolError
+        self.states[cfg.AWAY_MODE] = _s(cfg.AWAY_MODE, "on")
+        self.assertTrue(self.run_tool("thermostat_status", zones="ski room").endswith("Away mode is on."))
+        self.states.clear()
+        with self.assertRaisesMessage(ToolError, "isn't answering"):
+            self.run_tool("thermostat_status")
+
+    def test_absolute_and_relative(self):
+        self.assertEqual(self.set(zones="living room", temperature=22), "Main Floor set to 22°.")
+        self.assertEqual(self.set(zones="kitchen", change=-2), "Main Floor set to 20°.")
+        self.assertEqual(self.set(zones="bunk room", change=1), "Basement + Bunks set to 18.5°.")
+        self.assertEqual(self.set(zones="ski room", temperature=70), "Ski Room set to 21°.")  # °F
+        self.assertEqual(self.set(zones="ski room", temperature=21), "Ski Room is already at 21°.")
+        self.assertEqual([c[:2] for c in self.calls], [("climate", "set_temperature")] * 4)
+
+    def test_guest_clamps(self):
+        self.assertEqual(self.set(zones="master bedroom", temperature=30),
+                         "Master Bedroom set to 23°, the most I can change it at once.")
+        self.assertEqual(self.set(zones="master bedroom", temperature=30),
+                         "Master Bedroom set to 24°, the most I can do.")
+        self.assertEqual(self.set(zones="master bedroom", change=2),
+                         "Master Bedroom is already at 24°, the most I can do.")
+        self.assertEqual(self.set(zones="ski room", temperature=12),
+                         "Ski Room set to 18°, the lowest I can go.")
+        # Already below the guest range: never pulled up by "cooler", may warm.
+        self.assertEqual(self.set(zones="bunk room", change=-1),
+                         "Basement + Bunks is already at 17.5°, the lowest I can go.")
+        self.assertEqual(self.sent(), {"climate.master_bedroom": 24, "climate.ski_room": 18})
+
+    def test_guest_limits_from_settings(self):
+        values = {"guest_min_c": 16, "guest_max_c": 21, "guest_max_change_c": 5}
+        with patch("radiant.assistant.app_setting",
+                   side_effect=lambda app, key, default, **kw: values.get(key, default)):
+            self.assertEqual(self.set(zones="ski room", temperature=25), "Ski Room set to 21°, the most I can do.")
+            self.assertEqual(self.set(zones="bunk room", temperature=15),
+                             "Basement + Bunks set to 16°, the lowest I can go.")
+
+    def test_whole_house_clamps_each_zone(self):
+        text = self.set(zones="whole house", change=10)
+        self.assertEqual(self.sent(), {"climate.master_bedroom": 23, "climate.main_floor": 23,
+                                       "climate.ski_room": 23, "climate.basement_bunk_rooms": 20.5})
+        self.assertIn("Basement Master heat is turned off", text)
+        self.assertNotIn("climate.basement_master", self.sent())
+
+    def test_owner_full_range(self):
+        self.assertEqual(self.set(zones="ski room", temperature=30, mode="owner"), "Ski Room set to 30°.")
+        self.assertEqual(self.set(zones="ski room", temperature=40, mode="owner"),
+                         "Ski Room set to 32°, the most I can do.")
+        self.assertEqual(self.set(zones="ski room", temperature=5, mode="owner"),
+                         "Ski Room set to 10°, the lowest I can go.")
+
+    def test_bad_requests(self):
+        from bdh_sdk.tools import ToolError
+        with self.assertRaisesMessage(ToolError, "Say either"):
+            self.set(zones="ski room")
+        with self.assertRaisesMessage(ToolError, "Say either"):
+            self.set(zones="ski room", temperature=20, change=1)
+        with self.assertRaisesMessage(ToolError, "no thermostat zone"):
+            self.set(zones="heat pump", temperature=20)
+        with self.assertRaisesMessage(ToolError, "could mean"):
+            self.set(zones="master", change=1)
+        self.assertEqual(self.calls, [])
+
+    def test_failed_call(self):
+        with patch("radiant.assistant.call_service", return_value=(False, "HA 500")):
+            self.assertEqual(self.set(zones="ski room", change=1), "Ski Room didn't respond.")
+
+
+class AssistantGatewayTests(TestCase):
+    """The tools run through the hub's session gateway (FakeBroker) in guest mode."""
+
+    def setUp(self):
+        from bdh_sdk import Stay, settings as sdk_settings
+        from bdh_sdk.testing import FakeBroker
+
+        store = sdk_settings._store
+        self.addCleanup(sdk_settings.set_store, store)
+        self.broker = FakeBroker(grants=("tools.*", "settings.get", "ha.*"), install=True, app_id="radiant")
+        self.broker.start()
+        self.addCleanup(self.broker.stop)
+        self.broker.stay = Stay(guest="Smith")
+        self.broker.settings[("radiant", "guest_max_c")] = 21
+        self.broker.on("ha.get_entity_states", lambda p: {
+            eid: s for eid, s in make_states().items() if eid in p["entity_ids"]})
+        self.calls = []
+        self.broker.on("ha.call_service", lambda p: self.calls.append(p) or [True, None])
+
+    def call(self, name, args=None):
+        from bdh_sdk import tools as sdk_tools
+        from . import assistant
+        for tool in assistant.tools(mode="guest"):
+            self.broker.add_tool(tool, lambda a, t=tool.id: assistant.run_tool(t, a, mode="guest"))
+        return sdk_tools.call_tool(sdk_tools.open_session(), name, args)
+
+    def test_status_and_set(self):
+        out = self.call("thermostat_status", {"zones": "ski room"})
+        self.assertEqual(out, {"ok": True, "result": "Ski Room 19°, set 20°, floor loop 25°."})
+        out = self.call("set_thermostat", {"zones": "ski room", "temperature": 23})
+        self.assertEqual(out, {"ok": True, "result": "Ski Room set to 21°, the most I can do."})
+        (call,) = self.calls
+        self.assertEqual((call["entity_id"], call["extra_data"]), ("climate.ski_room", {"temperature": 21}))

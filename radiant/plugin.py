@@ -6,6 +6,9 @@ spec = PluginSpec(
     app="radiant",
     urls="radiant.urls",
     status="radiant.homepage.status",
+    # The assistant can read the zone thermostats and change their setpoints (guest limits apply).
+    tools="radiant.assistant.tools",
+    run_tool="radiant.assistant.run_tool",
     tiles=(
         Tile(
             title="Radiant Heat",
@@ -27,6 +30,37 @@ spec = PluginSpec(
             unit="s",
             help="How long the page waits after the last +/- tap before sending the setpoint "
                  "(the Nest integration is rate limited).",
+        ),
+        Setting(
+            "guest_min_c",
+            "Assistant: guest minimum",
+            type=INT,
+            default=18,
+            minimum=10,
+            maximum=32,
+            unit="°C",
+            help="Lowest setpoint the voice assistant sets for guests (and between stays).",
+        ),
+        Setting(
+            "guest_max_c",
+            "Assistant: guest maximum",
+            type=INT,
+            default=24,
+            minimum=10,
+            maximum=32,
+            unit="°C",
+            help="Highest setpoint the voice assistant sets for guests (and between stays).",
+        ),
+        Setting(
+            "guest_max_change_c",
+            "Assistant: guest change per request",
+            type=INT,
+            default=3,
+            minimum=0,
+            maximum=10,
+            unit="°C",
+            help="Most the assistant moves a guest's setpoint in one request. Signed-in owners "
+                 "get the thermostat's full range.",
         ),
     ),
     api_version=2,

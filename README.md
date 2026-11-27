@@ -7,6 +7,32 @@ installed into the hub through the `blackdiamondhub.plugins` entry point
 
 Page: `/radiant/`.
 
+## Assistant tools
+
+The hub's assistant (e.g. the voice app) can read and set the five zone thermostats (Master
+Bedroom, Main Floor, Ski Room, Basement Master, Basement + Bunks). Both tools are offered in every
+mode (guest, dashboard and owner) when `radiant` is in the hub's `assistant_apps` setting
+(Settings > Location > Assistant).
+
+| Tool | Params | Does |
+|---|---|---|
+| `thermostat_status` (read-only) | `zones` (optional) | Each zone's room temperature, setpoint, heat off / eco / heating, and for one or two zones the floor loop's return temperature; notes away mode. e.g. `Master Bedroom 19.5°, set 19°.` |
+| `set_thermostat` | `zones`, and `temperature` (°C; 50-90 is taken as °F) or `change` (± degrees) | Sets the setpoint (0.5° steps). e.g. `Basement + Bunks set to 18.5°.`, `Main Floor set to 24°, the most I can do.` |
+
+`zones` is the guest's words: a zone, a room (kitchen / living room / dining room = Main Floor,
+bunk room = Basement + Bunks, downstairs master = Basement Master), a floor (upstairs,
+downstairs/basement = both basement zones), `all` / the whole house, or several separated by
+commas. "Master" or "bedroom" alone is ambiguous and the tool asks which; misheard names
+("bunk rum") match loosely.
+
+Limits: outside owner mode (guests, and the dashboard between stays; voice sessions are never
+owner) setpoints stay within `guest_min_c`-`guest_max_c` (default 18-24 °C) and move at most
+`guest_max_change_c` (default 3 °C) per request; a zone already outside the range is never pushed
+further out. Signed-in owners get the thermostat's full range (10-32 °C). The tools never touch
+the heat pumps, the AECO plant controller or any other climate entity, never change a
+thermostat's mode (a zone whose heat is off, or in eco, is reported and left alone) and never
+change away mode. The three limits are app settings (Settings page, admin only).
+
 ## Container (hub API 2)
 
 Since 2.0.0 the app runs in its own container and reaches Home Assistant only through the hub
